@@ -1,124 +1,82 @@
 # src/market_simulator/orderbook.py
 
-from decimal import Decimal, getcontext
-from dataclasses import dataclass
-from typing import List, Tuple
+from decimal import Decimal
+from typing import Dict
 import heapq
-import random
-
-getcontext().prec = 28
 
 
-MIN_SPREAD_BPS = Decimal("0.001")  # 10 bps = 0.1%
-
-
-@dataclass(order=True)
-class PriceLevel:
-    price: Decimal
-    size: Decimal
-
-
-class OrderBookL2:
+def consume_market_order(self, side: str, size: Decimal) -> Dict[str, Decimal]:
     """
-    Libro L2 institucional.
-    Invariante garantizado por construcción:
-    best_bid < best_ask y spread >= 10 bps
+    Ejecuta orden de mercado contra el book.
+
+    Retorna:
+    {
+        "executed_size": Decimal,
+        "avg_price": Decimal,
+        "remaining": Decimal,
+        "slippage_bps": Decimal
+    }
     """
+    book_side = self.asks if side == "buy" else self.bids
 
-    def __init__(self, mid_price: Decimal = Decimal("0.50")):
-        self.depth = 5
-        self.mid_price = mid_price
-        self.bids: List[Tuple[Decimal, Decimal]] = []
-        self.asks: List[Tuple[Decimal, Decimal]] = []
-        self._initialize_book()
+    remaining = size
+    total_cost = Decimal("0")
+    executed = Decimal("0")
 
-    # ==============================
-    # Inicialización estructural
-    # ==============================
+    # Precio pre-trade
+    pre_trade_mid = self.mid_price()
 
-    def _initialize_book(self):
-        base_spread = self.mid_price * MIN_SPREAD_BPS
+    temp_levels = []
 
-        best_bid = self.mid_price - base_spread
-        best_ask = self.mid_price + base_spread
-
-        for i in range(self.depth):
-            bid_price = best_bid - Decimal(i) * base_spread
-            ask_price = best_ask + Decimal(i) * base_spread
-
-            bid_size = Decimal(random.uniform(100, 500)).quantize(Decimal("0.01"))
-            ask_size = Decimal(random.uniform(100, 500)).quantize(Decimal("0.01"))
-
-            heapq.heappush(self.bids, (-bid_price, bid_size))
-            heapq.heappush(self.asks, (ask_price, ask_size))
-
-    # ==============================
-    # Acceso seguro
-    # ==============================
-
-    def best_bid(self) -> PriceLevel:
-        price, size = self.bids[0]
-        return PriceLevel(price=-price, size=size)
-
-    def best_ask(self) -> PriceLevel:
-        price, size = self.asks[0]
-        return PriceLevel(price=price, size=size)
-
-    # ==============================
-    # Extracción ordenada L2
-    # ==============================
-
-    def get_depth(self, levels: int = 5):
-        bids_sorted = sorted(
-            [PriceLevel(-p, s) for p, s in self.bids],
-            reverse=True
-        )[:levels]
-
-        asks_sorted = sorted(
-            [PriceLevel(p, s) for p, s in self.asks]
-        )[:levels]
-
-        return {"bids": bids_sorted, "asks": asks_sorted}
-
-    # ==============================
-    # Consumo real
-    # ==============================
-
-    def consume_market_order(self, side: str, size: Decimal):
-        book_side = self.asks if side == "buy" else self.bids
-        remaining = size
-
-        while remaining > 0 and book_side:
+    while remaining > 0 and book_side:
+        if side == "buy":
             price, liquidity = heapq.heappop(book_side)
+        else:
+            neg_price, liquidity = heapq.heappop(book_side)
+            price = -neg_price
 
-            if side == "sell":
-                price = -price
+        if liquidity <= 0:
+            continue
 
-            if liquidity > remaining:
-                liquidity -= remaining
-                remaining = Decimal("0")
-                if side == "buy":
-                    heapq.heappush(self.asks, (price, liquidity))
-                else:
-                    heapq.heappush(self.bids, (-price, liquidity))
-            else:
-                remaining -= liquidity
+        take = min(remaining, liquidity)
 
-        self._maintain_depth()
+        total_cost += take * price
+        executed += take
+        remaining -= take
+        liquidity -= take
 
-    # ==============================
-    # Reposición estructural segura
-    # ==============================
+        if liquidity > 0:
+            temp_levels.append((price, liquidity))
 
-    def _maintain_depth(self):
-        spread_unit = self.mid_price * MIN_SPREAD_BPS
+    # Reinsertar niveles parcialmente consumidos
+    for price, liquidity in temp_levels:
+        if side == "buy":
+            heapq.heappush(book_side, (price, liquidity))
+        else:
+            heapq.heappush(book_side, (-price, liquidity))
 
-        while len(self.bids) < self.depth:
-            new_price = self.best_bid().price - spread_unit
-            new_size = Decimal(random.uniform(100, 500)).quantize(Decimal("0.01"))
-            heapq.heappush(self.bids, (-new_price, new_size))
+    avg_price = (
+        (total_cost / executed)
+        if executed > 0
+        else Decimal("0")
+    )
 
-        while len(self.asks) < self.depth:
-            new_price = self.best_ask().price + spread_unit
-            new_size = Decimal(random.uniform(100, 500)).quantize(Decimal("0.01"))
-            heapq.heappush(self.asks, (new_price, new_size))
+    slippage_bps = Decimal("0")
+    if executed > 0 and pre_trade_mid > 0:
+        if side == "buy":
+            slippage = (avg_price - pre_trade_mid) / pre_trade_mid
+        else:
+            slippage = (pre_trade_mid - avg_price) / pre_trade_mid
+
+        slippage_bps = (slippage * Decimal("10000")).quantize(
+            Decimal("0.01")
+        )
+
+    self._maintain_depth()
+
+    return {
+        "executed_size": executed,
+        "avg_price": avg_price.quantize(Decimal("0.0001")),
+        "remaining": remaining,
+        "slippage_bps": slippage_bps
+    }

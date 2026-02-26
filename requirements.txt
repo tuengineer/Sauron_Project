@@ -1,0 +1,14 @@
+# Core
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# GCP
+google-cloud-firestore==2.14.0
+google-cloud-secret-manager==2.18.0
+
+# HTTP client
+httpx==0.25.2
+
+# Utils
+python-dotenv==1.0.0

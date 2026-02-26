@@ -1,23 +1,34 @@
+# src/market_simulator/latency_model.py
+
 import random
 
 
 class LatencyModel:
     """
-    Base 50ms ±10ms
-    Jitter 5%
-    Truncado >= 1ms
+    Latencia institucional:
+    Base 50±10ms
+    Floor 20ms
+    Hard cap 150ms
+    5% spike adicional 50–200ms
     """
 
     def __init__(self):
         self.base = 50
         self.variance = 10
-        self.jitter_pct = 0.05
+        self.floor = 20
+        self.cap = 150
+        self.spike_probability = 0.05
 
-    def sample(self):
+    def sample(self) -> float:
         latency = random.uniform(
             self.base - self.variance,
             self.base + self.variance
         )
-        jitter = latency * self.jitter_pct
-        latency = random.uniform(latency - jitter, latency + jitter)
-        return max(latency, 1.0)
+
+        if random.random() < self.spike_probability:
+            latency += random.uniform(50, 200)
+
+        latency = max(self.floor, latency)
+        latency = min(self.cap, latency)
+
+        return latency

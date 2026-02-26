@@ -1,32 +1,92 @@
+# src/polymarket/client.py
+from typing import List, Optional, Dict, Any
+from decimal import Decimal
+from datetime import datetime, timedelta
+
+from .models import Market, OrderBook, OrderBookLevel, Order
+from ..market_simulator.core import MarketSimulator
+from ..risk.manager import RiskManager, RiskException
+
+class PolymarketClientError(Exception):
+    """Error específico de operaciones Polymarket"""
+    pass
+
 class PolymarketSimulatorClient:
-    def __init__(self, simulator, risk_manager=None):
-        self.simulator = simulator
-        self.risk_manager = risk_manager
+    def __init__(self, simulator: MarketSimulator, risk_manager: Optional[RiskManager] = None):
+        self.sim = simulator
+        self.rm = risk_manager
 
-    async def health(self):
-        return {"status": "ok"}
+    # =====================================================
+    # Métodos públicos
+    # =====================================================
+    async def list_markets(self, tags: Optional[List[str]] = None) -> List[Market]:
+        quote = self.sim.book.get_depth(levels=1)
+        mid = (quote["bids"][0].price + quote["asks"][0].price) / 2 if quote["bids"] else Decimal("0.5")
 
-    async def place_order(self, order):
-        if self.risk_manager:
-            allowed = self.risk_manager.check(order.size)
-            if not allowed:
-                return {"status": "blocked"}
-
-        await self.simulator.step()
-        return {"status": "filled"}
-
-    async def get_book(self):
-        return {
-            "bid": self.simulator.book.best_bid(),
-            "ask": self.simulator.book.best_ask()
-        }
-
-    async def run_simulation(self, steps: int):
-        await self.simulator.run(steps)
-        return {"status": "completed"}
-
-    async def reset(self):
-        self.simulator = type(self.simulator)(
-            real_time_sleep=self.simulator.real_time_sleep
+        market = Market(
+            id=getattr(self.sim.book, "market_id", "sim-1"),
+            title=f"Simulated Market {id(self.sim)}",
+            tags=["crypto", "simulated"],
+            yes_price=mid,
+            no_price=Decimal("1") - mid,
+            volume=sum(t["size"] for t in self.sim.trade_history),
+            liquidity=sum(l[1] for l in self.sim.book.asks) + sum(l[1] for l in self.sim.book.bids),
+            resolution_date=datetime.utcnow() + timedelta(days=30),
+            status="active"
         )
-        return {"status": "reset"}
+
+        if tags and not any(t in market.tags for t in tags):
+            return []
+        return [market]
+
+    async def get_orderbook(self, market_id: str) -> OrderBook:
+        if market_id != getattr(self.sim.book, "market_id", "sim-1"):
+            raise PolymarketClientError(f"Market {market_id} not found")
+
+        depth = self.sim.book.get_depth(levels=5)
+
+        return OrderBook(
+            market_id=market_id,
+            bids=[OrderBookLevel(price=b.price, size=b.size) for b in depth["bids"]],
+            asks=[OrderBookLevel(price=a.price, size=a.size) for a in depth["asks"]],
+            timestamp_ms=self.sim.current_time_ms
+        )
+
+    async def place_order(self, order: Order) -> Order:
+        # Validación de riesgo
+        if self.rm:
+            try:
+                await self.rm.validate_and_spend(float(order.size))
+            except RiskException as e:
+                order.status = "rejected"
+                raise PolymarketClientError(f"Risk check failed: {e}")
+
+        side_map = {"YES": "buy", "NO": "sell"}
+        sim_side = side_map.get(order.side, order.side.lower())
+        execution = self.sim.book.consume_market_order(sim_side, order.size)
+
+        # Actualizar order
+        order.filled_size = execution["executed_size"]
+        order.remaining_size = execution["remaining"]
+        order.executed_price = execution["avg_price"]
+        order.slippage = execution["slippage_bps"] / Decimal("10000")
+        order.status = "filled" if execution["remaining"] == 0 else "partial"
+        order.latency_ms = self.sim.latency.sample()
+
+        # Registrar trade
+        self.sim.trade_history.append({
+            "timestamp_ms": self.sim.current_time_ms,
+            "order_side": order.side,
+            "size": order.filled_size,
+            "price": order.executed_price,
+            "slippage_bps": execution["slippage_bps"],
+            "agent_order": True
+        })
+
+        return order
+
+    async def get_portfolio(self, wallet_address: str) -> List[Order]:
+        return []
+
+    def get_simulator_stats(self, market_id: Optional[str] = None) -> Dict[str, Any]:
+        return self.sim.get_simulation_stats()

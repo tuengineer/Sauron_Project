@@ -1,4 +1,4 @@
-# src/market_simulator/tests/test_client_integration.py
+# tests/test_client_integration.py
 import pytest
 from decimal import Decimal
 from market_simulator import MarketSimulator

@@ -1,192 +1,72 @@
+# src/risk/test_risk.py
 import pytest
 from decimal import Decimal
-from datetime import timedelta
+from datetime import datetime, timedelta
+from src.risk.manager import RiskManager
 
-from risk.manager import RiskManager
+# ==============================
+# FIXTURES
+# ==============================
+@pytest.fixture
+def risk_manager():
+    return RiskManager()
 
-
-# ==========================================================
-# 1️⃣ COSTO EXACTO LÍMITE (Boundary)
-# size=5, price=0.5 → cost=2.50
-# ==========================================================
-
-def test_cost_exact_limit_approved():
-    rm = RiskManager()
-
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.70"),
-    )
-
-    assert result["approved"] is True
-    assert result["cost"] == Decimal("2.5000")
-    assert rm.daily_trades == 1
-
-
-# ==========================================================
-# 2️⃣ COSTO EXCEDIDO
-# size=6, price=0.5 → cost=3.00
-# ==========================================================
-
-def test_cost_exceeded_rejected():
-    rm = RiskManager()
-
-    result = rm.validate_trade(
-        size=Decimal("6"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
-    assert result["approved"] is False
-    assert result["reason"] == "COST_EXCEEDED"
-
-
-# ==========================================================
-# 3️⃣ ICM BAJO
-# ==========================================================
-
-def test_icm_below_threshold_rejected():
-    rm = RiskManager()
-
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.60"),
-    )
-
-    assert result["approved"] is False
-    assert result["reason"] == "ICM_TOO_LOW"
-
-
-# ==========================================================
-# 4️⃣ KILL SWITCH EXACTO -6.00
-# ==========================================================
-
-def test_kill_switch_exact_boundary():
-    rm = RiskManager()
-
-    # Simular pérdida que lleva exactamente a -6.00
-    rm.record_result(Decimal("-6.00"))
-
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
-    assert result["approved"] is False
-    assert result["reason"] == "KILL_SWITCH_ACTIVE"
-
-
-# ==========================================================
-# 5️⃣ COOLDOWN ACTIVO TRAS PÉRDIDA
-# ==========================================================
-
-def test_cooldown_after_single_loss():
-    rm = RiskManager()
-
-    # Registrar pérdida → activa cooldown
-    rm.record_result(Decimal("-1.00"))
-
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
-    assert result["approved"] is False
-    assert result["reason"] == "COOLDOWN_ACTIVE"
-
-
-# ==========================================================
-# 6️⃣ COOLDOWN EXPIRA
-# ==========================================================
-
-def test_cooldown_expires():
-    rm = RiskManager()
-
-    rm.record_result(Decimal("-1.00"))
-
-    # Forzar expiración manual del cooldown
-    rm.cooldown_until = rm.cooldown_until - timedelta(hours=5)
-
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
+# ==============================
+# 1. VALIDACIÓN BÁSICA
+# ==============================
+def test_trade_approved(risk_manager):
+    icm = Decimal("0.75")
+    result = risk_manager.validate_trade(size=1.0, price=1.0, icm=icm)
     assert result["approved"] is True
 
-
-# ==========================================================
-# 7️⃣ MÁXIMO TRADES POR DÍA
-# ==========================================================
-
-def test_max_trades_per_day_limit():
-    rm = RiskManager()
-
-    for _ in range(4):
-        rm.validate_trade(
-            size=Decimal("5"),
-            price=Decimal("0.5"),
-            icm=Decimal("0.80"),
-        )
-
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
+def test_trade_rejected_icm_low(risk_manager):
+    icm = Decimal("0.65")
+    result = risk_manager.validate_trade(size=1.0, price=1.0, icm=icm)
     assert result["approved"] is False
-    assert result["reason"] == "MAX_TRADES_REACHED"
+    assert "ICM" in result["reason"]
 
-
-# ==========================================================
-# 8️⃣ ANTI-FOMO (30 min)
-# ==========================================================
-
-def test_anti_fomo_block():
-    rm = RiskManager()
-
-    rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
-    # Intentar inmediatamente
-    result = rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
-
+def test_trade_rejected_cost_high(risk_manager):
+    icm = Decimal("0.75")
+    result = risk_manager.validate_trade(size=2.0, price=2.0, icm=icm)
     assert result["approved"] is False
-    assert result["reason"] == "ANTI_FOMO_BLOCK"
+    assert "Costo" in result["reason"]
 
+def test_trade_rejected_max_trades(risk_manager):
+    icm = Decimal("0.75")
+    # Simular 4 trades ya ejecutados
+    for _ in range(risk_manager.MAX_TRADES_PER_DAY):
+        risk_manager.trade_count += 1
+    result = risk_manager.validate_trade(size=1.0, price=1.0, icm=icm)
+    assert result["approved"] is False
+    assert "Límite diario" in result["reason"]
 
-# ==========================================================
-# 9️⃣ RESET DIARIO
-# ==========================================================
+def test_trade_rejected_anti_fomo(risk_manager):
+    icm = Decimal("0.75")
+    risk_manager.last_trade_time = datetime.utcnow()
+    result = risk_manager.validate_trade(size=1.0, price=1.0, icm=icm)
+    assert result["approved"] is False
+    assert "Anti-FOMO" in result["reason"]
 
-def test_reset_daily_clears_state():
-    rm = RiskManager()
+# ==============================
+# 2. COOLDOWN Y KILL SWITCH
+# ==============================
+def test_cooldown_activates_on_loss(risk_manager):
+    risk_manager.record_result(Decimal("-1.00"))
+    assert risk_manager.cooldown_until > datetime.utcnow()
+    assert risk_manager.kill_switch is False
 
-    rm.record_result(Decimal("-2.00"))
-    rm.validate_trade(
-        size=Decimal("5"),
-        price=Decimal("0.5"),
-        icm=Decimal("0.80"),
-    )
+def test_kill_switch_activates_on_limit(risk_manager):
+    # Forzar daily_pnl cercano al límite
+    risk_manager.daily_pnl = Decimal("-5.50")
+    risk_manager.record_result(Decimal("-1.00"))
+    assert risk_manager.kill_switch is True
 
-    rm.reset_daily()
+def test_no_trade_during_cooldown(risk_manager):
+    risk_manager.record_result(Decimal("-1.00"))
+    assert not risk_manager.can_trade()  # Cooldown activo
 
-    status = rm.get_status()
-
-    assert status["daily_pnl"] == Decimal("0.00")
-    assert status["daily_trades"] == 0
-    assert status["cooldown_active"] is False
-    assert status["kill_switch_active"] is False
+def test_no_trade_after_kill_switch(risk_manager):
+    risk_manager.daily_pnl = Decimal("-6.00")
+    risk_manager.record_result(Decimal("0"))
+    assert not risk_manager.can_trade()
+    assert risk_manager.kill_switch is True

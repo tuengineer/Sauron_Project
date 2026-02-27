@@ -52,38 +52,57 @@ class PolymarketSimulatorClient:
             timestamp_ms=self.sim.current_time_ms
         )
 
-    async def place_order(self, order: Order) -> Order:
-        # Validación de riesgo
-        if self.rm:
-            try:
-                await self.rm.validate_and_spend(float(order.size))
-            except RiskException as e:
-                order.status = "rejected"
-                raise PolymarketClientError(f"Risk check failed: {e}")
+async def place_order(self, order: Order) -> Order:
+    """
+    Ejecuta orden contra el libro del simulador.
+    El RiskManager se valida externamente (main.py).
+    """
 
-        side_map = {"YES": "buy", "NO": "sell"}
-        sim_side = side_map.get(order.side, order.side.lower())
-        execution = self.sim.book.consume_market_order(sim_side, order.size)
+    side_map = {"YES": "buy", "NO": "sell"}
+    sim_side = side_map.get(order.side, order.side.lower())
 
-        # Actualizar order
-        order.filled_size = execution["executed_size"]
-        order.remaining_size = execution["remaining"]
-        order.executed_price = execution["avg_price"]
-        order.slippage = execution["slippage_bps"] / Decimal("10000")
-        order.status = "filled" if execution["remaining"] == 0 else "partial"
-        order.latency_ms = self.sim.latency.sample()
+    execution = self.sim.book.consume_market_order(sim_side, order.size)
 
-        # Registrar trade
-        self.sim.trade_history.append({
-            "timestamp_ms": self.sim.current_time_ms,
-            "order_side": order.side,
-            "size": order.filled_size,
-            "price": order.executed_price,
-            "slippage_bps": execution["slippage_bps"],
-            "agent_order": True
-        })
+    # Actualizar order
+    order.filled_size = execution["executed_size"]
+    order.remaining_size = execution["remaining"]
+    order.executed_price = execution["avg_price"]
+    order.slippage = execution["slippage_bps"] / Decimal("10000")
+    order.status = "filled" if execution["remaining"] == 0 else "partial"
+    order.latency_ms = self.sim.latency.sample()
 
-        return order
+    # ==============================
+    # CÁLCULO SIMPLE DE PnL
+    # ==============================
+
+    realized_pnl = Decimal("0")
+
+    if order.executed_price and order.filled_size > 0:
+        # Mid actual tras ejecución
+        depth = self.sim.book.get_depth(levels=1)
+
+        if depth["bids"] and depth["asks"]:
+            mid = (depth["bids"][0].price + depth["asks"][0].price) / Decimal("2")
+
+            if order.side == "YES":
+                realized_pnl = (mid - order.executed_price) * order.filled_size
+            else:  # NO
+                realized_pnl = (order.executed_price - mid) * order.filled_size
+
+    order.realized_pnl = realized_pnl.quantize(Decimal("0.0001"))
+
+    # Registrar trade
+    self.sim.trade_history.append({
+        "timestamp_ms": self.sim.current_time_ms,
+        "order_side": order.side,
+        "size": order.filled_size,
+        "price": order.executed_price,
+        "slippage_bps": execution["slippage_bps"],
+        "agent_order": True,
+        "realized_pnl": order.realized_pnl
+    })
+
+    return order
 
     async def get_portfolio(self, wallet_address: str) -> List[Order]:
         return []

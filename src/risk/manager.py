@@ -53,15 +53,22 @@ class RiskManager:
     def record_result(self, pnl: Decimal) -> None:
         """
         Registrar PnL de orden ejecutada.
-        Actualiza daily_pnl, cooldown, kill switch si es necesario
+        Actualiza daily_pnl, activa cooldown tras pérdida, kill switch si es necesario.
         """
         self.daily_pnl += pnl
         self.trade_count += 1
         self.last_trade_time = datetime.utcnow()
-        if self.daily_pnl < self.DAILY_LOSS_LIMIT:
+        
+        # Activar kill switch si se excede límite diario
+        if self.daily_pnl <= self.DAILY_LOSS_LIMIT:
             self.kill_switch = True
-        else:
-            self.cooldown_until = datetime.utcnow() + timedelta(seconds=0)
+            print(f"[KILL_SWITCH_AUTO] daily_pnl={self.daily_pnl} <= limit={self.DAILY_LOSS_LIMIT}")
+            return
+        
+        # Activar cooldown 4h tras CUALQUIER pérdida (pnl < 0)
+        if pnl < 0:
+            self.cooldown_until = datetime.utcnow() + timedelta(seconds=self.COOLDOWN_DURATION)
+            print(f"[COOLDOWN_ACTIVATED] until={self.cooldown_until.isoformat()}")
 
     def can_trade(self) -> bool:
         """

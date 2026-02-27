@@ -1,0 +1,4 @@
+git checkout -b revision-inicial-coderabbit
+git add . # O añade el archivo específico que modificaste
+git commit -m "chore: Iniciar revisión de código con CodeRabbit [skip ci]"
+git push origin revision-inicial-coderabbit

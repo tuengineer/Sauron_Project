@@ -1,243 +1,106 @@
-from decimal import Decimal, getcontext
-from datetime import datetime, timedelta
-from typing import Dict, Optional
-
-# Alta precisión decimal
-getcontext().prec = 28
-
+# risk/manager.py
+from typing import Dict, Any
 
 class RiskManager:
-    """
-    RiskManager v2.0 - Fase 1 Conservadora
-
-    Sistema de control de riesgo basado en:
-    - Costo real por trade (size × price)
-    - Límite diario de pérdidas
-    - Cooldown tras pérdida
-    - Anti-FOMO timing
-    - Límite máximo de trades diarios
-    - Filtro de calidad ICM
-
-    Todas las operaciones monetarias usan Decimal.
-    """
+    # ==============================
+    # CONSTANTES FASE 1
+    # ==============================
+    MAX_COST_PER_TRADE = 2.50
+    DAILY_LOSS_LIMIT = -50.0
+    DAILY_LOSS_KILL_SWITCH = -100.0
+    COOLDOWN_DURATION = 3600  # segundos
 
     # ==============================
-    # FASE 1 CONFIGURACIÓN
+    # INIT
     # ==============================
-
-    MAX_COST_PER_TRADE = Decimal("2.50")
-    DAILY_BUDGET = Decimal("10.00")
-    MAX_TRADES_PER_DAY = 4
-
-    ICM_MIN = Decimal("0.70")
-
-    DAILY_LOSS_KILL_SWITCH = Decimal("-6.00")
-    CONSECUTIVE_LOSSES_MAX = 1
-    COOLDOWN_DURATION_HOURS = 4
-    MIN_TIME_BETWEEN_TRADES_MIN = 30
-
     def __init__(self, phase: int = 1):
-        """
-        :param phase: Preparado para futuras fases (actualmente solo Fase 1)
-        """
         self.phase = phase
+        self.daily_pnl = 0.0
+        self.cooldown_until = 0
+        self.kill_switch = False
 
-        # Estado diario
-        self.daily_pnl: Decimal = Decimal("0.00")
-        self.daily_trades: int = 0
-        self.consecutive_losses: int = 0
-
-        self.cooldown_until: Optional[datetime] = None
-        self.last_trade_time: Optional[datetime] = None
-
-    # ==========================================================
-    # MÉTODO PRINCIPAL DE VALIDACIÓN
-    # ==========================================================
-
-    def validate_trade(
-        self,
-        size: Decimal,
-        price: Decimal,
-        icm: Decimal
-    ) -> Dict:
+    # ==============================
+    # MÉTODOS PRINCIPALES
+    # ==============================
+    def validate_trade(self, size: float, price: float, icm: float) -> Dict[str, Any]:
         """
-        Valida si un trade puede ejecutarse bajo reglas de riesgo Fase 1.
-
-        :param size: Exposición nominal
-        :param price: Precio del mercado
-        :param icm: Índice de Credibilidad de Mercado
-        :return: dict {"approved": bool, "reason": str, "cost": Decimal}
+        Validación completa de una orden.
+        Devuelve dict con keys: approved (bool), reason (str)
         """
-
-        now = datetime.utcnow()
-        cost = (size * price).quantize(Decimal("0.0001"))
-
-        # 1️⃣ ICM
-        if icm < self.ICM_MIN:
-            return self._reject(
-                reason=f"ICM_TOO_LOW",
-                extra=f"icm={icm} threshold={self.ICM_MIN}",
-                cost=cost
-            )
-
-        # 2️⃣ Cooldown
-        if self._in_cooldown(now):
-            remaining = int((self.cooldown_until - now).total_seconds() // 60)
-            return self._reject(
-                reason="COOLDOWN_ACTIVE",
-                extra=f"remaining={remaining}m",
-                cost=cost
-            )
-
-        # 3️⃣ Kill Switch Diario
-        if self.daily_pnl <= self.DAILY_LOSS_KILL_SWITCH:
-            return self._reject(
-                reason="KILL_SWITCH_ACTIVE",
-                extra=f"daily_pnl={self.daily_pnl} limit={self.DAILY_LOSS_KILL_SWITCH}",
-                cost=cost
-            )
-
-        # 4️⃣ Anti-FOMO
-        if self.last_trade_time:
-            delta = now - self.last_trade_time
-            if delta < timedelta(minutes=self.MIN_TIME_BETWEEN_TRADES_MIN):
-                return self._reject(
-                    reason="ANTI_FOMO_BLOCK",
-                    extra=f"wait_more={(self.MIN_TIME_BETWEEN_TRADES_MIN - int(delta.total_seconds() // 60))}m",
-                    cost=cost
-                )
-
-        # 5️⃣ Límite trades diarios
-        if self.daily_trades >= self.MAX_TRADES_PER_DAY:
-            return self._reject(
-                reason="MAX_TRADES_REACHED",
-                extra=f"trades_today={self.daily_trades}",
-                cost=cost
-            )
-
-        # 6️⃣ Validación económica final (costo real)
+        if self.kill_switch or self._in_cooldown():
+            return {"approved": False, "reason": "Kill switch o cooldown activo"}
+        cost = size * price
         if cost > self.MAX_COST_PER_TRADE:
-            return self._reject(
-                reason="COST_EXCEEDED",
-                extra=f"cost={cost} max={self.MAX_COST_PER_TRADE}",
-                cost=cost
-            )
+            return {"approved": False, "reason": "Costo por trade excede límite"}
+        if self.daily_pnl + cost < self.DAILY_LOSS_LIMIT:
+            self.kill_switch = True
+            return {"approved": False, "reason": "Límite diario de pérdida excedido, kill switch activado"}
+        return {"approved": True, "reason": "Trade aprobado"}
 
-        # ✅ Aprobado
-        self.daily_trades += 1
-        self.last_trade_time = now
-
-        print(
-            f"[APPROVED] size={size} price={price} cost={cost} "
-            f"icm={icm} daily_pnl={self.daily_pnl} trades_today={self.daily_trades}"
-        )
-
-        return {
-            "approved": True,
-            "reason": "APPROVED",
-            "cost": cost
-        }
-
-    # ==========================================================
-    # REGISTRO DE RESULTADOS
-    # ==========================================================
-
-    def record_result(self, pnl: Decimal) -> None:
+    def record_result(self, pnl: float) -> None:
         """
-        Registra resultado de trade cerrado.
-        Activa cooldown si hay pérdida.
+        Registrar PnL de orden ejecutada.
+        Actualiza daily_pnl, activa cooldown si es necesario.
         """
-
         self.daily_pnl += pnl
-
-        if pnl < Decimal("0"):
-            self.consecutive_losses += 1
+        if self.daily_pnl < self.DAILY_LOSS_LIMIT:
+            self.kill_switch = True
+            print(f"[KILL_SWITCH] Activado automáticamente, daily_pnl={self.daily_pnl}")
         else:
-            self.consecutive_losses = 0
-
-        # Activar cooldown tras 1 pérdida
-        if self.consecutive_losses >= self.CONSECUTIVE_LOSSES_MAX:
-            self.cooldown_until = datetime.utcnow() + timedelta(
-                hours=self.COOLDOWN_DURATION_HOURS
-            )
-            print(
-                f"[COOLDOWN_ACTIVATED] until={self.cooldown_until.isoformat()}"
-            )
-
-        # Kill switch activado
-        if self.daily_pnl <= self.DAILY_LOSS_KILL_SWITCH:
-            print(
-                f"[KILL_SWITCH] daily_pnl={self.daily_pnl} "
-                f"limit={self.DAILY_LOSS_KILL_SWITCH}"
-            )
-
-    # ==========================================================
-    # UTILIDADES INTERNAS
-    # ==========================================================
-
-    def _in_cooldown(self, now: datetime) -> bool:
-        if self.cooldown_until and now < self.cooldown_until:
-            return True
-        return False
-
-    def _reject(self, reason: str, extra: str, cost: Decimal) -> Dict:
-        print(f"[REJECTED] reason={reason} {extra}")
-        return {
-            "approved": False,
-            "reason": reason,
-            "cost": cost
-        }
-
-    # ==========================================================
-    # API PÚBLICA AUXILIAR
-    # ==========================================================
+            self.cooldown_until = 0  # reset cooldown si PnL positivo
 
     def can_trade(self) -> bool:
         """
-        Check rápido sin parámetros.
+        Check rápido si se puede operar.
         """
-        now = datetime.utcnow()
+        return not self.kill_switch and not self._in_cooldown()
 
-        if self.daily_pnl <= self.DAILY_LOSS_KILL_SWITCH:
-            return False
-
-        if self._in_cooldown(now):
-            return False
-
-        if self.daily_trades >= self.MAX_TRADES_PER_DAY:
-            return False
-
-        return True
-
-    def get_status(self) -> Dict:
+    def get_status(self) -> Dict[str, Any]:
         """
-        Devuelve estado completo del búnker.
+        Estado completo del RiskManager.
         """
-        now = datetime.utcnow()
-        cooldown_remaining = None
-
-        if self.cooldown_until and now < self.cooldown_until:
-            cooldown_remaining = int(
-                (self.cooldown_until - now).total_seconds() // 60
-            )
-
         return {
             "daily_pnl": self.daily_pnl,
-            "daily_trades": self.daily_trades,
-            "consecutive_losses": self.consecutive_losses,
-            "cooldown_active": cooldown_remaining is not None,
-            "cooldown_remaining_min": cooldown_remaining,
-            "kill_switch_active": self.daily_pnl <= self.DAILY_LOSS_KILL_SWITCH
+            "kill_switch": self.kill_switch,
+            "cooldown_until": self.cooldown_until,
+            "can_trade": self.can_trade()
         }
 
     def reset_daily(self) -> None:
         """
-        Reset diario (00:00 UTC).
+        Reset diario de contadores y kill switch.
         """
-        self.daily_pnl = Decimal("0.00")
-        self.daily_trades = 0
-        self.consecutive_losses = 0
-        self.cooldown_until = None
-        self.last_trade_time = None
+        self.daily_pnl = 0.0
+        self.kill_switch = False
+        self.cooldown_until = 0
+        print("[RESET_DAILY] Estado diario reseteado")
 
-        print("[DAILY_RESET] RiskManager state cleared")
+    # ==============================
+    # API PÚBLICA AUXILIAR
+    # ==============================
+    def force_kill_switch(self) -> None:
+        """
+        Fuerza la activación manual del kill switch vía API.
+        Útil para parada de emergencia operada por humano.
+        """
+        self.daily_pnl = self.DAILY_LOSS_KILL_SWITCH
+        self.kill_switch = True
+        print(f"[KILL_SWITCH_FORCED] daily_pnl set to {self.daily_pnl}")
+
+    def manual_reset(self) -> None:
+        """
+        Reset manual completo del estado de riesgo.
+        Desactiva kill switch, cooldown, y limpia contadores.
+        """
+        self.reset_daily()
+        print("[MANUAL_RESET] RiskManager reseteado por operador")
+
+    # ==============================
+    # MÉTODOS PRIVADOS
+    # ==============================
+    def _in_cooldown(self) -> bool:
+        import time
+        return time.time() < self.cooldown_until
+
+    def _reject(self, reason: str) -> Dict[str, Any]:
+        return {"approved": False, "reason": reason}

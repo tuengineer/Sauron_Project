@@ -1,4 +1,22 @@
-git checkout -b revision-inicial-coderabbit
-git add . # O añade el archivo específico que modificaste
-git commit -m "chore: Iniciar revisión de código con CodeRabbit [skip ci]"
-git push origin revision-inicial-coderabbit
+# .coderabbit.yaml
+language: "es-ES"
+early_access: false
+reviews:
+    profile: "chill" # O "simple" o "thorough" para más profundidad
+    request_changes_workflow: false
+    high_level_summary: true
+    poem: false
+    review_status: true
+    collapse_walkthrough: false
+    path_instructions:
+        - path: "**/*.{js,ts,py,java,go}" # Aplica a todos los archivos de código
+          instructions: |
+            "Realiza una revisión exhaustiva de este archivo. 
+            Busca problemas de seguridad, rendimiento, mantenibilidad,
+            y sugiere mejoras en la estructura y el diseño."
+    auto_review:
+        enabled: true
+        drafts: false
+        base_branches:
+            - "main"
+            - "develop"

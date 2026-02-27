@@ -31,7 +31,7 @@ reviews:
         - Sugiere usar variables CSS para valores repetidos."
     - path: "**/*"  # Resto de archivos (configuración, etc.)
       instructions: |
-        "Revisa este archivo de configuración o documento.
+        "Revisa este archivo de configuración o documento. @coderabbitai Revisa la arquitectura general de este proyecto y sugiere mejoras.
         - Verifica que no contenga secretos o credenciales.
         - Comprueba que la sintaxis sea correcta según el formato (JSON, YAML, etc.).
         - Sugiere mejoras de legibilidad o buenas prácticas."

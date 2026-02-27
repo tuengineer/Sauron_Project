@@ -10,9 +10,8 @@ class PolymarketClientError(Exception):
     pass
 
 class PolymarketSimulatorClient:
-    def __init__(self, simulator: MarketSimulator, risk_manager: Optional["RiskManager"] = None):
+    def __init__(self, simulator: MarketSimulator):
         self.sim = simulator
-        self.rm = risk_manager
 
     # =====================================================
     # Métodos públicos
@@ -53,22 +52,11 @@ class PolymarketSimulatorClient:
     async def place_order(self, order: Order) -> Order:
         """
         Ejecuta orden contra el libro del simulador.
-        Valida riesgo si se proporciona un RiskManager.
+        
+        NOTA: Validación de riesgo ahora ocurre en main.py antes de llamar este método.
+        Este cliente es "tonto" — solo ejecuta, no valida.
         """
 
-        # ==============================
-        # VALIDACIÓN DE RIESGO
-        # ==============================
-        if self.rm:
-            try:
-                await self.rm.validate_and_spend(float(order.size))
-            except Exception as e:  # Asumiendo RiskException u otra excepción específica
-                order.status = "rejected"
-                raise PolymarketClientError(f"Risk check failed: {e}")
-
-        # ==============================
-        # EJECUCIÓN DE LA ORDEN
-        # ==============================
         side_map = {"YES": "buy", "NO": "sell"}
         sim_side = side_map.get(order.side, order.side.lower())
 

@@ -2,10 +2,8 @@
 from typing import List, Optional, Dict, Any
 from decimal import Decimal
 from datetime import datetime, timedelta
-
 from .models import Market, OrderBook, OrderBookLevel, Order
 from ..market_simulator.core import MarketSimulator
-from ..risk.manager import RiskManager, RiskException
 
 class PolymarketClientError(Exception):
     """Error específico de operaciones Polymarket"""

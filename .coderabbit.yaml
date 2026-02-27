@@ -1,44 +1,43 @@
-# .coderabbit.yaml
-language: "es-ES"           # Idioma de los comentarios (opcional)
-early_access: false         # Activar funciones experimentales
+language: "es-ES"
+early_access: false
 reviews:
-  profile: "chill"          # Perfil de revisión: chill, simple, thorough
-  request_changes_workflow: false
-  high_level_summary: true  # Resumen general de la PR
-  poem: false               # No queremos poemas, queremos código
-  review_status: true       # Muestra el progreso de la revisión
-  collapse_walkthrough: false # No colapsar el recorrido
-  path_instructions:        # Aquí viene lo importante
-    - path: "**/*.{js,ts,jsx,tsx}"  # Archivos JavaScript/TypeScript
+  profile: "thorough"
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  path_instructions:
+    - path: "**/*.{js,ts,jsx,tsx}"
       instructions: |
-        "Eres un experto en JavaScript/TypeScript. Revisa este archivo buscando:
-         - Posibles fugas de memoria o manejo incorrecto de promesas.
-         - Complejidad ciclomática alta; sugiere refactors.
-         - Seguridad: sanitización de entradas, uso seguro de eval, etc.
-         - Cumplimiento de las guías de estilo del proyecto (asume que usamos Airbnb)."
+        "Revisa este archivo JavaScript/TypeScript como si fueras un arquitecto senior.
+        - Analiza la complejidad ciclomática y sugiere dividir funciones grandes.
+        - Busca patrones que puedan causar memory leaks (ej. event listeners no removidos).
+        - Verifica que las promesas tengan catch o se manejen con try/catch en async/await.
+        - Señala cualquier uso inseguro de any (en TypeScript).
+        - Comprueba que las importaciones no tengan dependencias circulares."
     - path: "**/*.py"
       instructions: |
-        "Eres un experto en Python. Revisa este archivo buscando:
-         - Posibles errores de tipado (incluso si no se usa mypy).
-         - Manejo incorrecto de excepciones.
-         - Posibles problemas de rendimiento (por ejemplo, bucles innecesarios).
-         - Que se sigan los principios de PEP 8."
-    - path: "**/*.go"
+        "Revisa este archivo Python con ojo crítico.
+        - Identifica funciones o métodos que puedan beneficiarse de type hints.
+        - Busca bloques try/except demasiado amplios que puedan ocultar errores.
+        - Sugiere el uso de generadores para mejorar rendimiento en bucles grandes.
+        - Detecta posibles problemas de concurrencia si se usa threading o asyncio."
+    - path: "**/*.{html,css,scss}"
       instructions: |
-        "Eres un experto en Go. Revisa este archivo buscando:
-         - Errores comunes de concurrencia (goroutines sin sincronización).
-         - Manejo de errores: ¿se están ignorando errores importantes?
-         - Posibles fugas de recursos (archivos no cerrados, etc.)."
-    - path: "**/*.java"
+        "Revisa este archivo de estilos/marcado.
+        - Busca selectores CSS demasiado específicos que dificulten el mantenimiento.
+        - En HTML, verifica la accesibilidad (etiquetas alt, roles ARIA cuando sea necesario).
+        - Sugiere usar variables CSS para valores repetidos."
+    - path: "**/*"  # Resto de archivos (configuración, etc.)
       instructions: |
-        "Eres un experto en Java. Revisa este archivo buscando:
-         - Posibles NullPointerException.
-         - Uso incorrecto de colecciones o streams.
-         - Violaciones de principios SOLID.
-         - Cumplimiento de convenciones de nomenclatura."
+        "Revisa este archivo de configuración o documento.
+        - Verifica que no contenga secretos o credenciales.
+        - Comprueba que la sintaxis sea correcta según el formato (JSON, YAML, etc.).
+        - Sugiere mejoras de legibilidad o buenas prácticas."
   auto_review:
     enabled: true
-    drafts: false            # No revisar PRs en draft
+    drafts: false
     base_branches:
       - "main"
       - "develop"
